@@ -346,11 +346,12 @@ def deploy(config: Config, target: str, use_mpy: bool = None, yes: bool = False,
     # Until the new copy is all on the board, an error brings back the app of before
     restart_previous = True
     try:
-        check_micropython(config, package, board.read_micropython_version(target))
+        status = board.read_status(target)
+        check_micropython(config, package, status.get("micropython"))
 
         skip = skipped_folders(config)
         device_files = read_device_files(target, skip)
-        slot = target_slot(board.read_json_file(target, STATE_FILE), device_files)
+        slot = target_slot(status.get("state"), device_files)
         print(f"Slot: /{slot}")
 
         image = device_image(build_dir, slot)
@@ -372,14 +373,16 @@ def deploy(config: Config, target: str, use_mpy: bool = None, yes: bool = False,
         old_main = f"{slot}/main.py"
         if (plan["upload"] or stale) and old_main in device_files and old_main not in stale:
             stale.append(old_main)
+        free = status.get("free")
         if stale:
             if not remove_device_files(target, stale):
                 raise Error("cannot make room in the slot: nothing uploaded")
             for path in stale:
-                del device_files[path]
+                freed = device_files.pop(path)["size"]
+                free = free + freed if free is not None else None
 
         upload = plan_sync(wanted, device_files)["upload"]
-        needed, free = room_needed(wanted, device_files, upload), board.read_free_bytes(target)
+        needed = room_needed(wanted, device_files, upload)
         if free is not None and needed > free:
             raise Error(f"not enough room on the board: about {needed // 1024} KB to add, {free // 1024} KB free"
                         f" (two copies of the app take twice the room)")
@@ -404,7 +407,11 @@ def deploy(config: Config, target: str, use_mpy: bool = None, yes: bool = False,
             if remaining:
                 raise Error(f"files not removed ({', '.join(remaining)}): the board stays stopped")
 
-        if not board.release(target, True):
+        # The watchdog of the upload cannot be stopped: only a reset takes it
+        # away. With /hold still there the board comes back to the REPL
+        # without one, and an app that has no watchdog of its own is not
+        # restarted a minute after it starts.
+        if not (board.reset(target) and board.wait_for_board(target, arm=False) and board.release(target, True)):
             board.board_is_stuck()
             raise Error("the board stays stopped")
     except Error:
@@ -413,3 +420,42 @@ def deploy(config: Config, target: str, use_mpy: bool = None, yes: bool = False,
         raise
 
     return package, slot
+
+
+# ============================================================================
+# Going back
+# ============================================================================
+
+def rollback_slot(status: dict) -> str:
+    """
+    The copy a rollback goes to: the other one, or the confirmed one when
+    the copy that is running is still on trial.
+
+    Raises:
+        Error: there is no copy to go back to
+    """
+    if status.get("hold"):
+        raise Error("an upload was interrupted on this board: run `mpypublish deploy` again")
+    state = status.get("state") or {}
+    active = state.get("active") if state.get("active") in SLOTS else SLOTS[0]
+    slot = active if state.get("trial") in SLOTS else other_slot(active)
+    if slot not in status.get("slots", {}):
+        raise Error(f"no copy to go back to: /{slot} has no app in it")
+    return slot
+
+
+def rollback(target: str) -> tuple:
+    """
+    Makes the copy of before the active one.
+
+    Reading the board interrupts the app: it is left at the REPL, ready to
+    be restarted.
+
+    Returns:
+        (version.json of the copy, slot)
+    """
+    status = board.read_status(target)
+    slot = rollback_slot(status)
+    if not board.write_root_file(target, STATE_FILE, json.dumps({"active": slot})):
+        raise Error("ota.json not written: the board is as it was")
+    return status["slots"][slot], slot

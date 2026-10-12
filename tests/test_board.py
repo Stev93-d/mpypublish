@@ -178,26 +178,86 @@ class RecoveryTest(unittest.TestCase):
         release.assert_called_once_with("COM8", False)
 
 
+    def test_after_the_upload_the_board_is_awaited_without_a_watchdog(self):
+        scripts = []
+
+        def run(target, *args, timeout=120):
+            scripts.append(args[1])
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with mock.patch.object(board, "run_mpremote", side_effect=run), mock.patch.object(board, "time", FakeClock()):
+            self.assertTrue(board.wait_for_board("COM8"))
+            self.assertTrue(board.wait_for_board("COM8", arm=False))
+        self.assertIn("machine.WDT", scripts[0])
+        self.assertNotIn("WDT", scripts[1])
+
+
+STATUS = ('STATUS {"micropython": "1.27.0", "state": {"active": "b"}, '
+          '"slots": {"b": {"version": "2.2.0"}}, "pin": true, "hold": false, "free": 1310720}\r\n')
+
+
 class ReadTest(unittest.TestCase):
-    def answer(self, stdout, returncode=0):
+    def answer(self, stdout, returncode=0, stderr=""):
         return mock.patch.object(board, "run_mpremote",
-                                 return_value=subprocess.CompletedProcess([], returncode, stdout, ""))
+                                 return_value=subprocess.CompletedProcess([], returncode, stdout, stderr))
 
-    def test_state_file(self):
-        with self.answer('{"active": "b"}\r\n'):
-            self.assertEqual(board.read_json_file("COM8", "ota.json"), {"active": "b"})
-        for stdout, code in (("", 1), ("{broken", 0), ("[1, 2]", 0)):
-            with self.answer(stdout, code):
-                self.assertIsNone(board.read_json_file("COM8", "ota.json"), stdout)
+    def test_status_of_the_board(self):
+        with self.answer(STATUS):
+            status = board.read_status("COM8")
+        self.assertEqual(status["micropython"], "1.27.0")
+        self.assertEqual(status["state"], {"active": "b"})
+        self.assertEqual(status["slots"], {"b": {"version": "2.2.0"}})
+        self.assertEqual((status["pin"], status["hold"], status["free"]), (True, False, 1310720))
 
-    def test_micropython_version_and_free_room(self):
-        with self.answer("1.27.0\r\n"):
-            self.assertEqual(board.read_micropython_version("COM8"), "1.27.0")
-        with self.answer("", 1):
-            self.assertIsNone(board.read_micropython_version("COM8"))
-            self.assertIsNone(board.read_free_bytes("COM8"))
-        with self.answer("1310720\r\n"):
-            self.assertEqual(board.read_free_bytes("COM8"), 1310720)
+    def test_board_that_does_not_say(self):
+        for stdout, code in (("", 1), ("STATUS {broken\n", 0), ("STATUS [1]\n", 0), ("nothing\n", 0)):
+            with self.answer(stdout, code, stderr="could not enter raw repl"):
+                with self.assertRaisesRegex(Error, "cannot read the board on COM8"):
+                    board.read_status("COM8")
+
+    def test_files_of_the_board(self):
+        listing = STATUS + "TREE a/\r\nTREE   main.py 812\r\nTREE   lib/\r\nTREE     sensor.mpy 96\r\nTREE boot.py 3120\r\n"
+        with self.answer(listing) as run:
+            status = board.read_status("COM8", tree=True)
+        self.assertEqual(status["tree"], ["a/", "  main.py 812", "  lib/", "    sensor.mpy 96", "boot.py 3120"])
+        self.assertIn("def tree", run.call_args[0][2])
+
+    def test_scripts_are_valid(self):
+        compile(board.STATUS_SCRIPT + board.TREE_SCRIPT, "status", "exec")
+
+    def test_writing_and_removing_a_file_in_the_root(self):
+        scripts = []
+        with mock.patch.object(board, "mpremote_step",
+                               side_effect=lambda target, what, *args: scripts.append(args[1]) or True):
+            board.write_root_file("COM8", "ota.json", '{"active": "a"}')
+            board.write_root_file("COM8", "ota.pin", None)
+        for script in scripts:
+            compile(script, "write", "exec")
+            self.assertIn("os.chdir('/')", script)
+        self.assertIn("""f.write('{"active": "a"}')""", scripts[0])
+        self.assertIn("os.remove('ota.pin')", scripts[1])
+
+
+class ConsoleTest(unittest.TestCase):
+    def test_port_that_goes_and_comes_back_is_opened_again(self):
+        """It does at every reset of a board with native USB."""
+        import serial
+        first, second = mock.MagicMock(), mock.MagicMock()
+        first.read.side_effect = [b"MPY: soft", serial.SerialException("port gone")]
+        second.read.return_value = b" reboot\r\n"
+
+        with mock.patch("serial.Serial", side_effect=[first, serial.SerialException("not yet"), second]), \
+                mock.patch.object(board, "time", FakeClock()):
+            console = board.BoardConsole("COM8")
+            for _ in range(4):
+                console.poll()
+        self.assertEqual(console.text, "MPY: soft reboot\r\n")
+        first.close.assert_called_once()
+
+    def test_port_that_does_not_open(self):
+        import serial
+        with mock.patch("serial.Serial", side_effect=serial.SerialException("in use")):
+            self.assertFalse(board.BoardConsole("COM8").send(b"\x04"))
 
 
 if __name__ == "__main__":

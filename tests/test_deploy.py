@@ -327,12 +327,26 @@ class FakeBoard:
         self.free = free
         self.stops = True
         self.arrives = True             # False: the copy fails
+        self.resets = True
         self.stubborn = []              # files that cannot be removed
         self.log = []
 
     def stop_app(self, target):
         self.log.append("stop")
         return self.stops
+
+    def read_status(self, target, tree=False):
+        slots = {slot: {"version": "0.9.0"} for slot in ("a", "b") if slot + "/main.py" in self.files}
+        return {"micropython": self.micropython, "state": self.state, "slots": slots,
+                "pin": False, "hold": "hold" in self.files, "free": self.free}
+
+    def reset(self, target):
+        self.log.append("reset")
+        return self.resets
+
+    def write_root_file(self, target, name, text):
+        self.log.append(("write", name, text))
+        return True
 
     def read_device_files(self, target, skip=()):
         return dict(self.files)
@@ -377,9 +391,9 @@ class DeployTest(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             for module, name, replacement in (
                 (board, "stop_app", fake.stop_app),
-                (board, "read_micropython_version", lambda target: fake.micropython),
-                (board, "read_json_file", lambda target, name: fake.state),
-                (board, "read_free_bytes", lambda target: fake.free),
+                (board, "read_status", fake.read_status),
+                (board, "reset", fake.reset),
+                (board, "wait_for_board", lambda target, attempts=20, arm=True: True),
                 (board, "release", fake.release),
                 (board, "restart_previous_app", fake.restart_previous_app),
                 (deploy, "read_device_files", fake.read_device_files),
@@ -396,7 +410,7 @@ class DeployTest(unittest.TestCase):
         package, slot = self.deploy(fake)
         self.assertEqual(slot, "a")
         self.assertEqual(package["version"], "1.2.0")
-        self.assertEqual(fake.log, ["stop", "copy", ("release", True)])
+        self.assertEqual(fake.log, ["stop", "copy", "reset", ("release", True)])
         self.assertIn("a/main.py", fake.files)
         self.asked.assert_not_called()
 
@@ -408,7 +422,7 @@ class DeployTest(unittest.TestCase):
 
         _, slot = self.deploy(fake)
         self.assertEqual(slot, "b")
-        self.assertEqual(fake.log, ["stop", "copy", ("release", True)])
+        self.assertEqual(fake.log, ["stop", "copy", "reset", ("release", True)])
         for path in first:
             if path.startswith("a/"):
                 self.assertEqual(fake.files[path], first[path], path)
@@ -421,7 +435,7 @@ class DeployTest(unittest.TestCase):
             "b/gone.mpy": entry("removed since"),
         }, state={"active": "a"})
         self.deploy(fake)
-        self.assertEqual(fake.log, ["stop", ("remove", ["b/gone.mpy", "b/main.py"]), "copy", ("release", True)])
+        self.assertEqual(fake.log, ["stop", ("remove", ["b/gone.mpy", "b/main.py"]), "copy", "reset", ("release", True)])
 
     def test_code_in_the_root_is_asked_about_and_a_no_uploads_nothing(self):
         fake = FakeBoard(self.HAND_DEPLOYED)
@@ -437,7 +451,7 @@ class DeployTest(unittest.TestCase):
     def test_code_in_the_root_goes_only_after_the_new_copy_is_whole(self):
         fake = FakeBoard(self.HAND_DEPLOYED)
         self.deploy(fake, answer="y")
-        self.assertEqual(fake.log, ["stop", "copy", ("remove", ["app.py"]), ("release", True)])
+        self.assertEqual(fake.log, ["stop", "copy", ("remove", ["app.py"]), "reset", ("release", True)])
         self.assertIn("settings.json", fake.files)
 
         again = FakeBoard(self.HAND_DEPLOYED)
@@ -498,6 +512,63 @@ class DeployTest(unittest.TestCase):
         self.deploy(fake)
         self.assertIn("left where it is: notes.txt", self.output.getvalue())
         self.assertIn("notes.txt", fake.files)
+
+    def test_room_left_by_the_copy_being_replaced_counts(self):
+        old = {"sha256": "old", "size": 500000}
+        fake = FakeBoard({"a/main.py": entry("running"), "b/main.py": entry("old"), "b/big.mpy": old},
+                         state={"active": "a"}, free=100)
+        self.deploy(fake)
+        self.assertNotIn("b/big.mpy", fake.files)
+
+    def test_upload_ends_with_a_reset_before_the_board_is_released(self):
+        """
+        The watchdog of the upload only goes away with a reset. With /hold
+        still there nothing starts, and the app is then started without it.
+        """
+        fake = FakeBoard()
+        self.deploy(fake)
+        self.assertEqual(fake.log[-2:], ["reset", ("release", True)])
+
+        fake = FakeBoard()
+        fake.resets = False
+        with self.assertRaisesRegex(Error, "stays stopped"):
+            self.deploy(fake)
+        self.assertEqual(fake.log, ["stop", "copy", "reset"])
+        self.assertIn("Unplug the USB cable", self.output.getvalue())
+
+
+class RollbackTest(unittest.TestCase):
+    BOTH = {"a": {"version": "2.1.0", "git": "abc1234"}, "b": {"version": "2.2.0", "git": "def5678"}}
+
+    def status(self, state, slots=BOTH, **more):
+        return dict({"state": state, "slots": slots, "hold": False}, **more)
+
+    def test_goes_to_the_other_copy(self):
+        self.assertEqual(deploy.rollback_slot(self.status({"active": "b"})), "a")
+        self.assertEqual(deploy.rollback_slot(self.status({"active": "a"})), "b")
+
+    def test_copy_on_trial_is_given_up_for_the_confirmed_one(self):
+        state = {"active": "a", "trial": "b", "boots": 1, "version": "2.2.0"}
+        self.assertEqual(deploy.rollback_slot(self.status(state)), "a")
+
+    def test_nothing_to_go_back_to(self):
+        """After the first deploy the other copy is empty."""
+        with self.assertRaisesRegex(Error, "/b has no app"):
+            deploy.rollback_slot(self.status({"active": "a"}, slots={"a": {}}))
+        with self.assertRaisesRegex(Error, "no copy"):
+            deploy.rollback_slot(self.status(None, slots={}))
+
+    def test_interrupted_upload_is_not_rolled_back(self):
+        with self.assertRaisesRegex(Error, "deploy"):
+            deploy.rollback_slot(self.status({"active": "a"}, hold=True))
+
+    def test_writes_the_state_and_says_what_will_start(self):
+        fake = FakeBoard({"a/main.py": entry("old"), "b/main.py": entry("new")}, state={"active": "b"})
+        with mock.patch.object(board, "read_status", fake.read_status), \
+                mock.patch.object(board, "write_root_file", fake.write_root_file):
+            version, slot = deploy.rollback("COM8")
+        self.assertEqual((version, slot), ({"version": "0.9.0"}, "a"))
+        self.assertEqual(fake.log, [("write", "ota.json", '{"active": "a"}')])
 
 
 if __name__ == "__main__":

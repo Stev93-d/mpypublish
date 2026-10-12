@@ -19,7 +19,7 @@ class ConfigTest(unittest.TestCase):
                          [settings.root / "src", settings.root / "settings.example.json"])
         self.assertEqual(settings.sources[0].exclude, ["*.md", "tests/"])
         self.assertEqual(settings.ready, "Main loop started")
-        self.assertEqual((settings.restart, settings.ota_path, settings.ready_timeout), ("hard", "/ota", 60))
+        self.assertEqual((settings.ota_path, settings.ready_timeout), ("/ota", 60))
 
     def test_found_from_a_folder_below(self):
         path = support.make_project(self)
@@ -62,8 +62,8 @@ class ConfigTest(unittest.TestCase):
             self.load('[app]\nname = "demo"\nmpy = "yes"\n[[source]]\nfrom = "src"\n')
         with self.assertRaisesRegex(Error, "keep"):
             self.load('[app]\nname = "demo"\n[[source]]\nfrom = "src"\n[board]\nkeep = "settings.json"\n')
-        with self.assertRaisesRegex(Error, "restart"):
-            self.load('[app]\nname = "demo"\n[[source]]\nfrom = "src"\n[board]\nrestart = "never"\n')
+        with self.assertRaisesRegex(Error, "ready_timeout"):
+            self.load('[app]\nname = "demo"\n[[source]]\nfrom = "src"\n[board]\nready_timeout = "a minute"\n')
 
     def test_paths_stay_on_the_board(self):
         with self.assertRaisesRegex(Error, r"\.\."):

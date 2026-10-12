@@ -16,7 +16,6 @@ mpypublish.toml: what an app is made of and what a deploy leaves alone.
     keep = ["config.json", "data/"]     # never touched by a deploy
     ready = "Main loop started"         # line of the boot log that says the app is up
     ready_timeout = 60
-    restart = "hard"
 
     [ota]
     path = "/ota"
@@ -52,7 +51,6 @@ class Config:
     keep: list = field(default_factory=list)
     ready: str = None
     ready_timeout: float = 60
-    restart: str = "hard"
     ota_path: str = "/ota"
 
     def kept(self, path: str) -> bool:
@@ -147,14 +145,11 @@ def load(path: Path) -> Config:
     if not sources:
         raise Error(f"{path.name}: no [[source]], nothing to put on the board")
 
-    board = _table(data, "board", ("keep", "ready", "ready_timeout", "restart"))
+    board = _table(data, "board", ("keep", "ready", "ready_timeout"))
     keep = []
     for entry in _strings(board, "board", "keep"):
         folder = entry.replace("\\", "/").endswith("/")
         keep.append(_inside(entry, "board", "keep") + ("/" if folder else ""))
-    restart = _value(board, "board", "restart", str, "hard")
-    if restart not in ("hard", "soft"):
-        raise Error("[board] restart: 'hard' or 'soft'")
 
     ota = _table(data, "ota", ("path",))
     ota_path = "/" + _inside(_value(ota, "ota", "path", str, "/ota"), "ota", "path")
@@ -169,6 +164,5 @@ def load(path: Path) -> Config:
         keep=keep,
         ready=_value(board, "board", "ready", str),
         ready_timeout=float(_value(board, "board", "ready_timeout", (int, float), 60)),
-        restart=restart,
         ota_path=ota_path,
     )

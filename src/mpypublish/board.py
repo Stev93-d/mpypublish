@@ -136,16 +136,17 @@ def find_port(requested) -> str:
 # Stopping the app, and getting the board back
 # ============================================================================
 
-def wait_for_board(target: str, attempts: int = 20) -> bool:
+def wait_for_board(target: str, attempts: int = 20, arm: bool = True) -> bool:
     """
     Waits for the board to answer again after a reset (the USB port goes and comes back).
 
     The first command it gets arms the watchdog of the upload: from there on
-    a board that hangs restarts by itself.
+    a board that hangs restarts by itself. With arm=False the board is left
+    without, which is what is wanted once the upload is over.
     """
     for _ in range(attempts):
         time.sleep(1)
-        if run_mpremote(target, "exec", ARM_WATCHDOG, timeout=15).returncode == 0:
+        if run_mpremote(target, "exec", ARM_WATCHDOG if arm else "pass", timeout=15).returncode == 0:
             return True
     return False
 
@@ -225,7 +226,7 @@ def release(target: str, uploaded: bool) -> bool:
         action = f"os.rename('{MAIN_PARKED}', 'main.py')"
 
     return mpremote_step(target, "Releasing the board", "exec", (
-        ARM_WATCHDOG +
+        AT_ROOT +
         f"for step in (lambda: {action}, lambda: os.remove('{HOLD_FILE}')):\n"
         "    try:\n"
         "        step()\n"
@@ -249,32 +250,147 @@ def restart_previous_app(target: str) -> bool:
 
 
 # ============================================================================
-# Reading from the board
+# Reading and writing in the root of the board
 # ============================================================================
 
-def read_json_file(target: str, name: str):
-    """A JSON file in the root of the board; None if missing or not an object"""
-    result = run_mpremote(target, "cat", ":/" + name)
-    if result.returncode != 0:
-        return None
+# Everything the commands need to know about a board, in one round trip
+STATUS_SCRIPT = AT_ROOT + '''
+import json
+def load(path):
     try:
-        data = json.loads(result.stdout)
-    except ValueError:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
         return None
     return data if isinstance(data, dict) else None
-
-
-def read_micropython_version(target: str):
-    """MicroPython version of the board ("1.27.0"); None if it cannot be read"""
-    result = run_mpremote(target, "exec", "import os; print(os.uname().release)")
-    version = result.stdout.strip()
-    return version if result.returncode == 0 and version else None
-
-
-def read_free_bytes(target: str):
-    """Free room on the flash of the board; None if it cannot be read"""
-    result = run_mpremote(target, "exec", "import os; s = os.statvfs('/'); print(s[0] * s[3])")
+def exists(path):
     try:
-        return int(result.stdout.strip()) if result.returncode == 0 else None
-    except ValueError:
-        return None
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+try:
+    s = os.statvfs("/")
+    free = s[0] * s[3]
+except Exception:
+    free = None
+print("STATUS", json.dumps({
+    "micropython": os.uname().release,
+    "state": load("ota.json"),
+    "slots": {slot: load(slot + "/version.json") or {} for slot in ("a", "b") if exists(slot + "/main.py")},
+    "pin": exists("ota.pin"),
+    "hold": exists("hold"),
+    "free": free,
+}))
+'''
+
+
+# The files of the board with their size, indented like their folders
+TREE_SCRIPT = '''
+def tree(path, indent):
+    for name in sorted(os.listdir(path or "/")):
+        full = (path + "/" + name) if path else name
+        info = os.stat(full)
+        if info[0] & 0x4000:
+            print("TREE", "  " * indent + name + "/")
+            tree(full, indent + 1)
+        else:
+            print("TREE", "  " * indent + name, info[6])
+tree("", 0)
+'''
+
+
+def parse_status(output: str):
+    """The dictionary printed by STATUS_SCRIPT; None if it is not in the output"""
+    for line in output.splitlines():
+        if line.startswith("STATUS "):
+            try:
+                status = json.loads(line[len("STATUS "):])
+            except ValueError:
+                return None
+            return status if isinstance(status, dict) else None
+    return None
+
+
+def read_status(target: str, tree: bool = False) -> dict:
+    """
+    What is on the board: MicroPython, ota.json ("state"), the version of
+    the copies that can start ("slots"), whether there is a PIN, free room.
+    With tree=True also the files, one per line, in "tree".
+
+    Reading interrupts the app, if it is running.
+
+    Raises:
+        Error: the board does not say
+    """
+    result = run_mpremote(target, "exec", STATUS_SCRIPT + (TREE_SCRIPT if tree else ""))
+    status = parse_status(result.stdout) if result.returncode == 0 else None
+    if status is None:
+        raise Error(f"cannot read the board on {target}: {last_line(result)}")
+    if tree:
+        status["tree"] = [line[len("TREE "):] for line in result.stdout.splitlines() if line.startswith("TREE ")]
+    return status
+
+
+def write_root_file(target: str, name: str, text) -> bool:
+    """Writes a small text file in the root of the board; None as text removes it"""
+    if text is None:
+        action = (
+            "try:\n"
+            f"    os.remove({name!r})\n"
+            "except OSError:\n"
+            "    pass\n"
+        )
+    else:
+        action = (
+            f"with open({name!r}, 'w') as f:\n"
+            f"    f.write({text!r})\n"
+        )
+    return mpremote_step(target, f"Writing {name}", "exec", AT_ROOT + action)
+
+
+class BoardConsole:
+    """
+    The serial port of the board, from the PC. Reading does not interrupt the app.
+
+    If the USB port goes and comes back (it does at every reset of the board)
+    it opens again by itself.
+    """
+
+    def __init__(self, port: str):
+        self.port = port
+        self.text = ""
+        self._serial = None
+
+    def _open(self):
+        import serial
+        if self._serial is None:
+            self._serial = serial.Serial(self.port, 115200, timeout=0.2, write_timeout=2)
+        return self._serial
+
+    def poll(self):
+        """Adds to self.text what has arrived"""
+        try:
+            data = self._open().read(4096)
+        except OSError:                 # serial.SerialException too
+            self.close()
+            time.sleep(0.2)
+            return
+        if data:
+            self.text += data.decode("utf-8", "replace")
+
+    def send(self, data: bytes) -> bool:
+        try:
+            self._open().write(data)
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    def close(self):
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:
+                pass
+            self._serial = None
