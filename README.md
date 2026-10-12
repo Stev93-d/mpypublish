@@ -58,7 +58,7 @@ keep = ["settings.json", "data/"]     # files of the board a deploy never touche
 ready = "Main loop started"           # a line your app prints once it is up
 ```
 
-Then, with the board on USB. This is `examples/minimal`, a whole project with the update over the network too:
+Then run `mpypublish deploy` with the board on USB. This is what it prints for `examples/minimal`, a whole project with the update over the network too:
 
 ```
 $ mpypublish deploy
