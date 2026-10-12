@@ -74,7 +74,7 @@ def describe(status: dict, target: str) -> list:
     last = state.get("last")
     if isinstance(last, dict):
         lines.append(f"  last update over the network: {last.get('result')} ({last.get('version')})")
-    lines.append("  updates over the network: " + ("on, a PIN is set" if status.get("pin") else "off, no PIN"))
+    lines.append("  PIN for the updates over the network: " + ("set" if status.get("pin") else "not set"))
     if status.get("hold"):
         lines.append("  an upload was interrupted: run `mpypublish deploy` again")
     return lines
@@ -115,8 +115,8 @@ def cmd_pin(args) -> int:
         return 1
     # Writing interrupted the app, and it reads the PIN when it starts
     board.reset(target)
-    print("PIN removed: updates over the network are off" if args.remove
-          else "PIN written: updates over the network are on")
+    print("PIN removed: whoever reaches the board on the network can update it" if args.remove
+          else "PIN written: updates over the network have to be signed with it")
     return 0
 
 
@@ -169,9 +169,9 @@ def main(argv=None) -> int:
 
     command("rollback", cmd_rollback, "make the copy of before the active one, and start it")
 
-    pin = command("pin", cmd_pin, "set the PIN for the updates over the network (the app is restarted)")
+    pin = command("pin", cmd_pin, "set the PIN the updates over the network are signed with (the app is restarted)")
     pin.add_argument("pin", nargs="?", help="4 to 32 letters and digits")
-    pin.add_argument("--remove", action="store_true", help="remove the PIN: updates over the network go off")
+    pin.add_argument("--remove", action="store_true", help="remove the PIN: updates need no signature")
 
     command("ls", cmd_ls, "show the copies and the files on the board (the app is restarted)")
 

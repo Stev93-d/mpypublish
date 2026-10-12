@@ -105,7 +105,7 @@ class OtherCommandsTest(CliTest):
                 mock.patch.object(board, "reset", return_value=True):
             code, output = self.run_cli("pin", "--remove")
         write.assert_called_once_with("COM8", "ota.pin", None)
-        self.assertIn("off", output)
+        self.assertIn("PIN removed", output)
 
     def test_pin_has_to_be_typeable(self):
         with mock.patch.object(board, "write_root_file", side_effect=AssertionError("must not get to the board")):
@@ -128,7 +128,7 @@ class OtherCommandsTest(CliTest):
             "  /a  2.1.0 (abc1234), built 2026-10-10T15:00:00Z",
             "  /b  2.2.0 (not in git), built 2026-10-12T09:30:00Z  <- active",
             "  last update over the network: ok (2.2.0)",
-            "  updates over the network: on, a PIN is set",
+            "  PIN for the updates over the network: set",
         ])
 
     def test_copy_on_trial_and_interrupted_upload(self):
@@ -136,7 +136,7 @@ class OtherCommandsTest(CliTest):
         lines = cli.describe(status, "COM8")
         self.assertIn("<- active", lines[1])
         self.assertIn("<- on trial", lines[2])
-        self.assertIn("off, no PIN", lines[3])
+        self.assertIn("not set", lines[3])
         self.assertIn("interrupted", lines[4])
 
     def test_board_never_deployed(self):

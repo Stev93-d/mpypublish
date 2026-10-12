@@ -30,6 +30,20 @@ class BuildTest(unittest.TestCase):
         self.assertTrue((build_dir / "manifest.json").is_file())
         self.assertEqual((build_dir / "lib/sensor.py").read_text(), support.FILES["src/lib/sensor.py"])
 
+    def test_package_brings_the_device_side_of_mpypublish(self):
+        """What the app imports to confirm a trial and to be updated from the network."""
+        build_dir, package = support.build_package(self)
+        for name in ("__init__.py", "updater.py", "httpd.py"):
+            self.assertIn("mpypublish/" + name, package["files"])
+        self.assertIn("def confirm", (build_dir / "mpypublish/__init__.py").read_text())
+        # boot.py is not in the package: it goes in the root, and only over USB
+        self.assertEqual([path for path in package["files"] if path.endswith("boot.py")], [])
+
+    def test_folder_of_the_device_side_is_taken(self):
+        files = dict(support.FILES, **{"src/mpypublish/extra.py": "X = 1\n"})
+        with self.assertRaisesRegex(Error, "mpypublish/"):
+            support.build_package(self, files=files)
+
     def test_caches_hidden_files_and_exclusions_stay_on_the_pc(self):
         _, package = support.build_package(self)
         for path in package["files"]:
