@@ -1,0 +1,11 @@
+[app]
+name = "minimal"
+version = "1.0.0"
+
+[[source]]
+from = "src"
+
+[board]
+# WiFi name and password stay on the board from one deploy to the next
+keep = ["wifi.json"]
+ready = "minimal: running"

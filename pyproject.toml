@@ -5,10 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mpypublish"
 version = "0.1.0"
-description = "Deploy MicroPython apps into two slots on the board, with trial boot and rollback, over USB or the network"
+description = "Deploy MicroPython apps into two copies on the board, with trial boot and rollback, over USB or the network"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Stev93-d" }]
 keywords = ["micropython", "esp32", "deploy", "ota", "rollback"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: MicroPython",
+    "Topic :: Software Development :: Embedded Systems",
+]
 # mpy-cross is not here on purpose: it has to be the version of the
 # MicroPython on the board, so it is installed by hand
 dependencies = ["mpremote>=1.22", "pyserial>=3.5"]
