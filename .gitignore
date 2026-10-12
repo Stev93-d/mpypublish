@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+
+# Output of `mpypublish build`, also inside the examples
+build/
+*.mpy
+
+# Packaging
+dist/
+*.egg-info/
+
+.idea/
+.vscode/
