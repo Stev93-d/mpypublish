@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 import support
-from mpypublish import board, cli, deploy, watch
+from mpypublish import board, cli, deploy, push, watch
 
 
 class CliTest(unittest.TestCase):
@@ -113,6 +113,24 @@ class OtherCommandsTest(CliTest):
                 code, output = self.run_cli("pin", *argv)
                 self.assertEqual(code, 1, argv)
                 self.assertIn("error: ", output)
+
+    def test_push_builds_the_project_and_sends_it(self):
+        project = support.make_project(self).parent
+        with mock.patch.object(push, "push", return_value=2) as pushed:
+            code, _ = self.run_cli("push", "192.168.1.50", "--pin", "4321", "--sabotage", "crash", cwd=project)
+        self.assertEqual(code, 2)                                    # the board went back: not a success
+        host, package_path, prefix, pin, how, stop_after, wait = pushed.call_args[0]
+        self.assertEqual((host, prefix, pin, how, stop_after, wait), ("192.168.1.50", "/ota", "4321", "crash", None, True))
+        self.assertEqual(package_path, project / "build" / "demo-1.2.0.zip")
+        self.assertTrue(package_path.is_file())
+
+    def test_push_of_a_package_already_built_needs_no_project(self):
+        with mock.patch.object(push, "push", return_value=0) as pushed:
+            code, _ = self.run_cli("push", "board.local:8080", "--zip", "demo-1.2.0.zip", "--path", "/api/update",
+                                   "--no-wait", cwd=support.make_project(self).parent.parent)
+        self.assertEqual(code, 0)
+        _host, package_path, prefix, _pin, _how, _stop, wait = pushed.call_args[0]
+        self.assertEqual((str(package_path), prefix, wait), ("demo-1.2.0.zip", "/api/update", False))
 
     STATUS = {
         "micropython": "1.27.0",

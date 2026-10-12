@@ -4,8 +4,9 @@ Command line of mpypublish.
     mpypublish build        # only the package, the board is not touched
     mpypublish deploy       # build and upload to the board connected over USB
     mpypublish rollback     # back to the copy of before
-    mpypublish pin 4321     # PIN for the updates over the network
     mpypublish ls           # what is on the board
+    mpypublish push 192.168.1.50      # build and send over the network
+    mpypublish pin 4321     # PIN the updates over the network are signed with
 """
 
 import argparse
@@ -17,6 +18,7 @@ from . import Error, __version__, board, watch
 from . import build as builder
 from . import config as configuration
 from . import deploy as deployer
+from . import push as pusher
 
 
 def load_config(args, needed=True):
@@ -120,6 +122,17 @@ def cmd_pin(args) -> int:
     return 0
 
 
+def cmd_push(args) -> int:
+    config = load_config(args, needed=not args.zip)
+    if args.zip:
+        package_path = Path(args.zip)
+    else:
+        build_dir, package = builder.build(config, False if args.no_mpy else None, verbose=args.verbose)
+        package_path = builder.write_package_zip(build_dir, package)
+    prefix = args.path or (config.ota_path if config else "/ota")
+    return pusher.push(args.host, package_path, prefix, args.pin, args.sabotage, args.stop_after, not args.no_wait)
+
+
 def cmd_ls(args) -> int:
     target = board.find_port(args.port)
     status = board.read_status(target, tree=True)
@@ -174,6 +187,18 @@ def main(argv=None) -> int:
     pin.add_argument("--remove", action="store_true", help="remove the PIN: updates need no signature")
 
     command("ls", cmd_ls, "show the copies and the files on the board (the app is restarted)")
+
+    push = command("push", cmd_push, "build and send over the network, then wait for the new version to confirm",
+                   port=False)
+    push.add_argument("host", help="address of the board: 192.168.1.50, 192.168.1.50:8080, thermostat.local")
+    push.add_argument("--pin", help="PIN of the board, if it has one")
+    push.add_argument("--zip", metavar="FILE", help="package already built; without, the project is built")
+    push.add_argument("--no-mpy", action="store_true", help="build the package with the .py sources")
+    push.add_argument("--path", help="where the updater answers; without, [ota] path of mpypublish.toml, or /ota")
+    push.add_argument("--no-wait", action="store_true", help="do not wait for the restart and the confirmation")
+    push.add_argument("--sabotage", choices=("crash", "hang", "corrupt"),
+                      help="break the package on purpose, to see the board go back")
+    push.add_argument("--stop-after", type=int, metavar="N", help="stop after N files, to see the board give up")
 
     args = parser.parse_args(argv)
     try:
