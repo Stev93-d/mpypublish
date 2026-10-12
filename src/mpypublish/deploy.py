@@ -292,7 +292,7 @@ def sync_files(target: str, image: dict, wanted: dict, skip=(), attempts: int = 
             missing = sorted(plan_sync(wanted, present)["upload"], key=upload_order)
             if not missing:
                 return present
-            print(f"  to copy: {len(missing)} files of {len(wanted)}")
+            print(f"  to copy: {len(missing)} of {len(wanted)} files")
             if copy_files(target, image, missing):
                 continue
         except Error as e:
@@ -312,6 +312,8 @@ def confirm(question: str) -> bool:
     try:
         return input(question + " y/N: ").strip().lower() in ("y", "yes")
     except EOFError:
+        # Nobody to ask: the line of the question is still open
+        print()
         return False
 
 
@@ -398,7 +400,8 @@ def deploy(config: Config, target: str, use_mpy: bool = None, yes: bool = False,
         restart_previous = False
         leftovers = plan["delete"]
         if leftovers:
-            print(f"Removing {len(leftovers)} files that are no longer part of the app")
+            print(f"Removing what is no longer part of the app: {len(leftovers)}"
+                  f" file{'' if len(leftovers) == 1 else 's'}")
             if verbose:
                 for path in leftovers:
                     print(f"  {path}")

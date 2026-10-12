@@ -6,6 +6,9 @@ __pycache__/
 build/
 *.mpy
 
+# The WiFi of whoever tries the example
+/examples/*/wifi.json
+
 # Packaging
 dist/
 *.egg-info/

@@ -13,16 +13,18 @@ I wrote it for a WiFi thermostat I am building on an ESP32-S3. A thermostat ends
 - The same package can be sent **over WiFi**. A version that arrives that way starts *on trial*: if it crashes, hangs, or never says it works, the board goes back to the one of before by itself.
 - `mpypublish rollback` goes back by hand.
 
+This is a package that raises an exception at start, sent on purpose. 72 seconds from the command to the last line:
+
 ```
 $ mpypublish push 192.168.1.50 --sabotage crash
-minimal: 5 files, 12 KB (.mpy), version 1.0.1 (9c1d2aa)
-minimal: version 1.0.0 (ef32ef8) in /a, MicroPython 1.27.0
+minimal: 5 files, 32 KB (sources), version 1.0.4 (not in git)
+minimal: version 1.0.3 (not in git) in /a, MicroPython 1.27.0
 Package broken on purpose: crash
-minimal-1.0.1.zip: version 1.0.1-crash (9c1d2aa), 5 files, 12 KB
+minimal-1.0.4.zip: version 1.0.4-crash (not in git), 5 files, 30 KB
   5/5 files, 100%
 Package checked: the board restarts with the new version on trial
-  version 1.0.0 (ef32ef8) answers
-The new version did not confirm: version 1.0.0 (ef32ef8) is back
+  version 1.0.3 (not in git) answers
+The new version did not confirm: version 1.0.3 (not in git) is back
 ```
 
 ## Install
@@ -56,25 +58,46 @@ keep = ["settings.json", "data/"]     # files of the board a deploy never touche
 ready = "Main loop started"           # a line your app prints once it is up
 ```
 
-Then, with the board on USB:
+Then, with the board on USB. This is `examples/minimal`, a whole project with the update over the network too:
 
 ```
 $ mpypublish deploy
-thermostat: 19 files, 46 KB (.mpy), version 1.3.0 (3f9a2c1)
-  for the update over the network: C:\thermostat\build\thermostat-1.3.0.zip
-Board on COM8
+minimal: 5 files, 32 KB (sources), version 1.0.0 (77855df)
+  for the update over the network: C:\mpypublish\examples\minimal\build\minimal-1.0.0.zip
+Board on COM10
 Stopping the app on the board...
-Slot: /b
-  to copy: 6 files of 22
-  6/6 files copied
-22 files on the board, hashes verified
+Slot: /a
+  to copy: 8 of 8 files
+  8/8 files copied
+8 files on the board, hashes verified
 Starting the app...
-Running: version 1.3.0 (3f9a2c1) in /b
+Running: version 1.0.0 (77855df) in /a
 ```
 
-If the board has code in its root, as after `mpremote cp`, the first deploy lists the files it is going to remove and asks before doing it.
+Between 20 and 30 seconds on my board. Two deploys later, with one source changed, the copy was 4 files of 8: `main.py`, `version.json`, `manifest.json` and `ota.json`.
 
-`examples/minimal` is a whole project that does this, with the update over the network too.
+If the board has code in its root, as after `mpremote cp`, the first deploy lists the files it is going to remove and asks before doing it:
+
+```
+This board has code in its root: from now on the app lives in /a and /b.
+These files will be removed, and boot.py replaced by the one that chooses the slot:
+  main.py
+  helper.py
+Go on? y/N:
+```
+
+A no leaves the board as it was, with its app running again.
+
+To try the example with the update over the network, give the board your WiFi first:
+
+```
+cd examples/minimal
+cp wifi.example.json wifi.json          # then put your network in it
+mpremote cp wifi.json :wifi.json
+mpypublish deploy
+mpremote                                # the app says the address it answers at; Ctrl-] to leave
+mpypublish push 192.168.1.50
+```
 
 ## What changes for your app
 
@@ -115,14 +138,16 @@ Then, from the PC:
 
 ```
 $ mpypublish push 192.168.1.50
-minimal: 5 files, 12 KB (.mpy), version 1.0.1 (9c1d2aa)
-minimal: version 1.0.0 (ef32ef8) in /a, MicroPython 1.27.0
-minimal-1.0.1.zip: version 1.0.1 (9c1d2aa), 5 files, 12 KB
+minimal: 5 files, 32 KB (sources), version 1.0.3 (not in git)
+minimal: version 1.0.1 (not in git) in /b, MicroPython 1.27.0
+minimal-1.0.3.zip: version 1.0.3 (not in git), 5 files, 32 KB
   5/5 files, 100%
 Package checked: the board restarts with the new version on trial
-  version 1.0.1 (9c1d2aa) answers, on trial
-Updated and confirmed: version 1.0.1 (9c1d2aa)
+  version 1.0.3 (not in git) answers
+Updated and confirmed: version 1.0.3 (not in git)
 ```
+
+14 seconds, restart included.
 
 `confirm()` is the point of the whole thing: call it when the app has shown it can do its job **and can still be updated**, so on the network and answering. A version that cannot be reached any more is one you can only fix with a cable.
 
@@ -154,7 +179,7 @@ The PIN is not sent: the manifest of the package is signed with it (HMAC-SHA256)
 | The upload over USB is cut short (Ctrl-C, cable pulled) | The board starts nothing until `mpypublish deploy` is run again: `/hold` is still there |
 | The version uploaded over USB does not start | `deploy` shows the boot log and ends with exit code 1. `mpypublish rollback` |
 
-You can see the first five happen on a board on your desk:
+Four of these can be made to happen on a board on your desk:
 
 ```
 mpypublish push 192.168.1.50 --sabotage crash      # or hang, or corrupt
@@ -192,7 +217,7 @@ Every package carries the version from `mpypublish.toml`, the git commit it was 
 
 ## Limits
 
-- **One board so far**: the mechanism comes from a project on an ESP32-S3-Zero with MicroPython 1.27, deployed from Windows. Other ESP32 should behave the same. I have not tried any other port.
+- **Tried on one board**: an ESP32-S3-Zero with MicroPython 1.27, from Windows. There I ran the deploy over USB, the rollback, the updates over WiFi with and without a PIN, and five of the failures above on purpose (crash, hang, corrupted file, sending stopped halfway, a version that does not start over USB). The rest is covered only by the tests on the PC. Other ESP32 should behave the same; I have not tried any other port.
 - **The watchdogs want 60 seconds.** Where the hardware watchdog cannot wait that long (RP2 stops at about 8) the upload and the trial go without, so a version that *hangs* on trial is not undone there. One that raises an exception stays at the REPL until the next restart.
 - **An app with no watchdog of its own** gets one extra restart about a minute after an update over the network: the trial watchdog cannot be stopped, only fed. Either confirm within the minute and accept the restart, or arm your own `machine.WDT` and feed it.
 - **Two copies take twice the room.** The device side of mpypublish adds about 10 KB per copy compiled, 32 KB as sources.

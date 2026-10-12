@@ -40,13 +40,13 @@ while True:
     if wlan.isconnected():
         if server is None:
             server = Server(Updater())
-            print("minimal: updates at http://%s/ota" % wlan.ifconfig()[0])
         server.poll()
         # On the network and answering: if this copy is on trial, it has shown enough
         mpypublish.confirm()
 
     if time.ticks_diff(time.ticks_ms(), said) >= SAY_EVERY_MS:
         said = time.ticks_ms()
-        print("minimal: version %s, from %s" % (version, mpypublish.app_dir()))
+        where = "http://%s/ota" % wlan.ifconfig()[0] if wlan.isconnected() else "not on the network"
+        print("minimal: version %s, from %s, %s" % (version, mpypublish.app_dir(), where))
 
     time.sleep_ms(10)
